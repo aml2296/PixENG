@@ -13,39 +13,49 @@
 struct Pixel
 {
 public:
-	SDL_Rect rect;
 	union
 	{
-		uint32_t c = 0xFF000000;
+		uint32_t c = 0xFF0000FF;
 		struct
 		{
 			uint8_t r, g, b, a;
 		};
 	};
-	Pixel();
-	Pixel(SDL_Rect rec)
+	Pixel()
 	{
-		rect = rec;
-	}
-	Pixel(SDL_Rect rec,uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha = 255)
+		
+	};
+	Pixel(uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha = 255)
 	{
-		rect = rec;
 		r = red;
 		g = green;
 		b = blue;
 		a = alpha;
 	};
 };
-struct Texture
+class Sprite
 {
+public:
 	SDL_Texture* texture;
+	SDL_Rect pos;
 	unsigned int nLayer = 0;
 
-	Texture(SDL_Texture &t, unsigned int n)
+	Sprite(SDL_Texture* t, unsigned int layer, SDL_Rect r);
+	~Sprite()
 	{
-
-	};
+		if (texture)
+			SDL_DestroyTexture(texture);
+	}
 };
+
+Sprite::Sprite(SDL_Texture* t = nullptr, unsigned int layer = 0, SDL_Rect r = SDL_Rect{ 0,0,0,0 })
+{
+	texture = t;
+	pos = r;
+	nLayer = layer;
+}
+
+
 
 class PixENG
 {
@@ -61,6 +71,7 @@ public:
 	float dTtimer = 1.0f;
 	int FrameCount = 0;
 	bool running = false;
+	std::vector<Sprite*> fTextureArray;
 	std::vector<Pixel> pixelArray;
 
 	SDL_Window* gWind = nullptr;
@@ -68,6 +79,11 @@ public:
 	SDL_Event gEvent;
 	Uint32 winID = 0;
 	
+	const uint32_t aMask = 0x000000FF;
+	const uint32_t bMask = 0x0000FF00;
+	const uint32_t gMask = 0x00FF0000;
+	const uint32_t rMask = 0xFF000000;
+
 
 	PixENG();
 	~PixENG();
@@ -77,7 +93,8 @@ public:
 	void Start(int pixW, int pixH);
 	int GameLoop();
 
-	//SDL_Texture* CreateTextureFromPixels(std::vector<Pixel>, unsigned int);
+	SDL_Texture* loadTexture(std::string location);
+	SDL_Texture* CreateTextureFromPixels(std::vector<Pixel> &pixels, unsigned int nLayer, int w, int h);
 };
 
 
@@ -87,7 +104,9 @@ PixENG::PixENG()
 } 
 PixENG::~PixENG()
 {
+	SDL_DestroyRenderer(gRend);
 	SDL_DestroyWindow(gWind);
+	SDL_Quit();
 }
 bool PixENG::Init(int scrW, int scrH)
 {
@@ -161,12 +180,7 @@ void PixENG::Start(int pixW, int pixH)
 	rPixW = pixW;
 	rPixH = pixH;
 
-	for (int y = 0; y < pixelH; y++)
-		for (int x = 0; x < pixelW; x++)
-			pixelArray.push_back(Pixel(SDL_Rect{ (int)(x * rPixW),(int)(y * rPixH),(int)rPixW,(int)rPixH }, 0, 0, 0));
-
 	running = true;
-
 	GameLoop();
 }
 int PixENG::GameLoop()
@@ -174,9 +188,6 @@ int PixENG::GameLoop()
 	OnStart();
 	auto tp1 = std::chrono::system_clock::now();
 	auto tp2 = std::chrono::system_clock::now();
-
-
-
 	while (running)
 	{
 		//Time
@@ -210,12 +221,9 @@ int PixENG::GameLoop()
 		SDL_RenderClear(gRend);
 
 		//Draw Textures
-		for (int x = 0; x < pixelW; x++)
-			for (int y = 0; y < pixelH; y++)
-			{
-				SDL_SetRenderDrawColor(gRend, pixelArray[x + (y * pixelW)].r, pixelArray[x + (y * pixelW)].g, pixelArray[x + (y * pixelW)].b, pixelArray[x + (y * pixelW)].a);
-				SDL_RenderFillRect(gRend, &pixelArray[x + (y * pixelW)].rect);
-			}
+		for (int i = 0; i < fTextureArray.size(); i++)
+			if (SDL_RenderCopy(gRend, fTextureArray[i]->texture, NULL, &fTextureArray[i]->pos) < 0)
+				printf("Unable to render texture %i! SDL Error: %s\n", i, SDL_GetError());
 		SDL_RenderPresent(gRend);
 
 		////Update Title Bar
@@ -232,7 +240,68 @@ int PixENG::GameLoop()
 	return 0;
 }
 
-/*SDL_Texture* PixENG::CreateTextureFromPixels(std::vector <Pixel> pixArray, unsigned int nLayer)
+
+//Loads Texture from file
+SDL_Texture* PixENG::loadTexture(std::string path)
 {
-	SDL_Texture returntexture = SDL_CreateTexture;
-}*/
+	//The final texture
+	SDL_Texture* newTexture = NULL;
+
+	//Load image at specified path
+	SDL_Surface* loadedSurface = IMG_Load(path.c_str());
+	if (loadedSurface == NULL)
+	{
+		printf("Unable to load image %s! SDL_image Error: %s\n", path.c_str(), IMG_GetError());
+	}
+	else
+	{
+		//Create texture from surface pixels
+		newTexture = SDL_CreateTextureFromSurface(gRend, loadedSurface);
+		if (newTexture == NULL)
+		{
+			printf("Unable to create texture from %s! SDL Error: %s\n", path.c_str(), SDL_GetError());
+		}
+
+		//Get rid of old loaded surface
+		SDL_FreeSurface(loadedSurface);
+	}
+
+	return newTexture;
+}
+//Does not work atm
+SDL_Texture *PixENG::CreateTextureFromPixels(std::vector<Pixel> &p, unsigned int nLayer, int w, int h)
+{
+	SDL_Texture* sdlTexture = nullptr;
+	uint32_t pixFormat = SDL_GetWindowPixelFormat(gWind);
+	SDL_PixelFormat* pixFormatMap = SDL_AllocFormat(pixFormat);
+	sdlTexture = SDL_CreateTexture(gRend, pixFormat, SDL_TEXTUREACCESS_STREAMING, w*rPixW, h*rPixH);
+
+	if (sdlTexture == nullptr)
+	{
+		std::ofstream error("error.txt", std::ios::trunc);
+		error << "Could not Create SDL_Texture:: " << SDL_GetError() << std::endl;
+		error.close();
+		SDL_ClearError();
+	}
+	else
+	{
+		SDL_Surface* surf = SDL_CreateRGBSurface(0, w * rPixW, h * rPixH, 32, rMask, gMask, bMask, aMask);
+		SDL_LockSurface(surf);
+		if (SDL_LockTexture(sdlTexture, NULL, &surf->pixels, &surf->pitch) < 0)
+		{
+			printf("SDL_LockTexture failed: %s\n", SDL_GetError());
+			SDL_ClearError();
+		}
+		else
+		{
+			uint32_t* textPix = (uint32_t*)surf->pixels;
+			for (int tX = 0; tX < w; tX++)
+				for (int tY = 0; tY < h; tY++)
+					memset(textPix, SDL_MapRGBA(pixFormatMap, p[tX + (tY * w)].r, p[tX + (tY * w)].g, (uint8_t)(w * h / 255) * tX + (tY * w), p[tX + (tY * w)].a), sizeof(uint32_t));
+			SDL_UnlockTexture(sdlTexture);
+			SDL_FreeFormat(pixFormatMap);
+			SDL_UnlockSurface(surf);
+		}
+	}
+	return sdlTexture;
+}
