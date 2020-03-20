@@ -9,6 +9,20 @@
 #include <SDL_thread.h>
 #include <chrono>
 
+//For Flag Comparisons
+template<class T> inline T operator~ (T a) { return (T)~(int)a; }
+template<class T> inline T operator| (T a, T b) { return (T)((int)a | (int)b); }
+template<class T> inline T operator& (T a, T b) { return (T)((int)a & (int)b); }
+template<class T> inline T operator^ (T a, T b) { return (T)((int)a ^ (int)b); }
+template<class T> inline T& operator|= (T& a, T b) { return (T&)((int&)a |= (int)b); }
+template<class T> inline T& operator&= (T& a, T b) { return (T&)((int&)a &= (int)b); }
+template<class T> inline T& operator^= (T& a, T b) { return (T&)((int&)a ^= (int)b); }
+
+enum class SpriteFlags
+{
+	NoFlag = 0 << 0,
+	hasMask = 1 << 0
+};
 
 struct Pixel
 {
@@ -33,27 +47,218 @@ public:
 		a = alpha;
 	};
 };
+
 class Sprite
 {
 public:
+	SpriteFlags flags = SpriteFlags::NoFlag;
 	SDL_Texture* texture;
 	SDL_Rect pos;
 	unsigned int nLayer = 0;
 
-	Sprite(SDL_Texture* t, unsigned int layer, SDL_Rect r);
+	Sprite(SDL_Texture* t, unsigned int layer, int x, int y);
 	~Sprite()
 	{
 		if (texture)
 			SDL_DestroyTexture(texture);
 	}
 };
+class PhysicsAsset
+{
+public:
+	float velocityX = 0.0f;
+	float velocityY = 0.0f;
+	SDL_Rect pBoundingBox;
+	bool gravity = true;
+	float gravityAmp = -9.8f;
 
-Sprite::Sprite(SDL_Texture* t = nullptr, unsigned int layer = 0, SDL_Rect r = SDL_Rect{ 0,0,0,0 })
+	//Returns true if the two Rects are touching or colliding
+	static bool CollisionCheck(SDL_Rect a, SDL_Rect b);
+	virtual void onCollision(PhysicsAsset other) {};
+	virtual void onColliding(PhysicsAsset other) {};
+	virtual void onExitCollision(PhysicsAsset other) {};
+};
+class PhysEntity : PhysicsAsset
+{
+private:
+	int posX = 0;
+	int posY = 0;
+	Sprite* sprite;
+public:
+	PhysEntity(Sprite* spt) { sprite = spt; pBoundingBox = sprite->pos; };
+	PhysEntity(Sprite* spt, SDL_Rect bBounds){sprite = spt;	pBoundingBox = bBounds;};
+	//Moves to Point x,y
+	void Move(int x, int y) { Translate(x - posX, y - posY); };
+	//Translates PhysEntity and updates Children Componenets
+	void Translate(int x, int y);
+	bool Gravity() { return gravity; };
+	void setGravity(float g) { gravityAmp = g; };
+	float GravityValue() { return gravityAmp; };
+	void AddVelocity(float x, float y) { velocityX += x;velocityY += y; };
+	void ApplyVelocity() { Translate(velocityX, velocityY); };
+	SDL_Rect *pBounds() { return &pBoundingBox; };
+	void HandleCollision(SDL_Rect b);
+};
+
+//List of Texture's, organizes by Layer upon insertion then by time of insertion if on the same layer
+struct TextureListNode
+{
+	SDL_Texture* texture = nullptr;
+	SDL_Rect* bounds = nullptr;
+	unsigned int* layer = 0;
+};
+class TextureList
+{
+	public:
+		std::vector<TextureListNode> list;
+		void insert(SDL_Texture* t, SDL_Rect *r, unsigned int* l)
+		{
+			std::vector<TextureListNode>::iterator it = list.begin();
+			while(it != list.end())
+			{
+				if (it->layer > l)
+					break;
+				it++;
+			}
+			list.insert(it, TextureListNode{ t,r,l });
+		};
+};
+
+Sprite::Sprite(SDL_Texture* t = nullptr, unsigned int layer = 0, int x = 0, int y = 0)
 {
 	texture = t;
-	pos = r;
 	nLayer = layer;
+	pos.x = x;
+	pos.y = y;
+	SDL_QueryTexture(t, nullptr, nullptr, &pos.w, &pos.h);
 }
+bool PhysicsAsset::CollisionCheck(SDL_Rect a, SDL_Rect b)
+{
+	if ((a.x <= b.x + b.w && a.x >= b.x) || (a.w + a.x <= b.w + b.x && a.w + a.x >= b.x))
+		if ((a.y <= b.y + b.h && a.y >= b.y) || (a.h + a.x <= b.h + b.y && a.h + a.y >= b.y))
+			return true;
+	return false;
+}
+void PhysEntity::Translate(int x, int y)
+{
+	posX += x;
+	posY += y;
+
+	pBoundingBox.x += x;
+	pBoundingBox.y += y;
+
+	sprite->pos.x += x;
+	sprite->pos.y += y;
+}
+void PhysEntity::HandleCollision(SDL_Rect b)
+{
+	if (velocityX > 0)
+	{
+		if (velocityY > 0)
+		{
+			if (velocityX > velocityY)
+			{
+				velocityY = 0;
+				Translate(0, -(pBoundingBox.y + pBoundingBox.h - b.y));
+			}
+			else if (velocityY > velocityX)
+			{
+				velocityX = 0;
+				Translate(-(pBoundingBox.x + pBoundingBox.w - b.x), 0);
+			}
+			else
+			{
+				velocityX = 0;
+				velocityY = 0;
+				Translate(-(pBoundingBox.x + pBoundingBox.w - b.x), -(pBoundingBox.y + pBoundingBox.h - b.y));
+			}
+		}
+		else if (velocityY < 0)
+		{
+			if (velocityX > -1 * velocityY)
+			{
+				velocityY = 0;
+				Translate(0, -(b.y + b.h - pBoundingBox.y));
+			}
+			else if (-1 * velocityY > velocityX)
+			{
+				velocityX = 0;
+				Translate(-(pBoundingBox.x + pBoundingBox.w - b.x), 0);
+			}
+			else
+			{
+				velocityX = 0;
+				velocityY = 0;
+				Translate(-(pBoundingBox.x + pBoundingBox.w - b.x), -(b.y + b.h - pBoundingBox.y));
+			}
+		}
+		else
+		{
+			velocityX = 0;
+			Translate(-(pBoundingBox.x + pBoundingBox.w - b.x), 0);
+		}
+	}
+	else if (velocityX < 0)
+	{
+		if (velocityY > 0)
+		{
+			if (-1*velocityX > velocityY)
+			{
+				velocityY = 0;
+				Translate(0, -(pBoundingBox.y + pBoundingBox.h - b.y));
+			}
+			else if (velocityY > -1*velocityX)
+			{
+				velocityX = 0;
+				Translate((b.x + b.w - pBoundingBox.x), 0);
+			}
+			else
+			{
+				velocityX = 0;
+				velocityY = 0;
+				Translate((b.x + b.w - pBoundingBox.x), -(pBoundingBox.y + pBoundingBox.h - b.y));
+			}
+		}
+		else if (velocityY < 0)
+		{
+			if (-1 * velocityX > -1*velocityY)
+			{
+				velocityY = 0;
+				Translate(0, (b.y + b.h - pBoundingBox.y));
+			}
+			else if (-1*velocityY > -1 * velocityX)
+			{
+				velocityX = 0;
+				Translate((b.x + b.w - pBoundingBox.x), 0);
+			}
+			else
+			{
+				velocityX = 0;
+				velocityY = 0;
+				Translate((b.x + b.w - pBoundingBox.x), (b.y + b.h - pBoundingBox.y));
+			}
+		}
+		else
+		{
+			velocityX = 0;
+			Translate((b.x + b.w - pBoundingBox.x), 0);
+		}
+	}
+	else
+	{
+		if (velocityY > 0)
+		{
+			velocityY = 0;
+			Translate(0, -(pBoundingBox.y + pBoundingBox.h - b.y));
+		}
+		else if (velocityY < 0)
+		{
+			velocityY = 0;
+			Translate(0, b.y + b.h - pBoundingBox.y);
+		}
+	}
+}
+
 
 
 
@@ -71,7 +276,10 @@ public:
 	float dTtimer = 1.0f;
 	int FrameCount = 0;
 	bool running = false;
-	std::vector<Sprite*> fTextureArray;
+	bool debug = false;
+
+	TextureList tList;
+	std::vector<SDL_Rect*> dRect;
 	std::vector<Pixel> pixelArray;
 
 	SDL_Window* gWind = nullptr;
@@ -198,7 +406,7 @@ int PixENG::GameLoop()
 
 		////USER INPUT EVENTS
 		//Handle Input
-		while(SDL_PollEvent(&gEvent))
+		while (SDL_PollEvent(&gEvent))
 		{
 			switch (gEvent.type)
 			{
@@ -221,9 +429,17 @@ int PixENG::GameLoop()
 		SDL_RenderClear(gRend);
 
 		//Draw Textures
-		for (int i = 0; i < fTextureArray.size(); i++)
-			if (SDL_RenderCopy(gRend, fTextureArray[i]->texture, NULL, &fTextureArray[i]->pos) < 0)
+		for (int i = 0; i < tList.list.size(); i++)
+			if (SDL_RenderCopy(gRend, tList.list[i].texture, NULL, tList.list[i].bounds) < 0)
 				printf("Unable to render texture %i! SDL Error: %s\n", i, SDL_GetError());
+
+		//Debug Draw
+		if (debug)
+		{
+			SDL_SetRenderDrawColor(gRend, 0, 255, 0, 255);
+			for (int i = 0; i < dRect.size(); i++)
+				SDL_RenderDrawRect(gRend, dRect[i]);
+		}
 		SDL_RenderPresent(gRend);
 
 		////Update Title Bar

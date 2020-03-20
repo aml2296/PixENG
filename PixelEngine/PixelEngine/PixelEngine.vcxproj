@@ -158,7 +158,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="PixelEngine.cpp" />
-    <ClCompile Include="PixENG.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="PixENG.h" />
