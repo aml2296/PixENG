@@ -2,6 +2,14 @@
 #include<random>
 #include<ctime>
 
+
+class Players : public PhysEntity
+{
+	Sprite sprite;
+
+};
+
+
 class bBall : public PixENG
 {
 	std::vector<PhysEntity*> bEntities;
@@ -18,6 +26,10 @@ class bBall : public PixENG
 	}
 	bool OnUpdate(float dT) override
 	{
+		////Handle Player Input
+		//
+
+
 		////Phys Related
 		//Move
 		for (int i = 0; i < bEntities.size(); i++)
@@ -68,7 +80,7 @@ class bBall : public PixENG
 		bEntities.push_back(bBaller);
 
 		//Court
-		asset = new Sprite(loadTexture("Bball_Court.png"));
+		asset = new Sprite(loadTexture("Bball_Court.png", Pixel{ 255,0,255 }));
 		asset->pos.w *= rPixW;
 		asset->pos.h *= rPixH;
 		bCourt = new PhysEntity(asset, SDL_Rect{ 0,screenH - 10,asset->pos.w,10 * (int)rPixH });
@@ -77,17 +89,6 @@ class bBall : public PixENG
 		tList.insert(asset->texture, &asset->pos, 0);
 		bEntities.push_back(bCourt);
 
-		
-		
-		//bBaller #2
-		/*
-		asset = new Sprite(loadTexture("BballSprite2.png"));
-		asset->pos.w *= rPixW;
-		asset->pos.h *= rPixH;
-		asset->pos.x += asset->pos.w * 2;
-		fTextureArray.push_back(asset);
-		*/
-
 
 		return success;
 	}
@@ -95,7 +96,6 @@ class bBall : public PixENG
 
 int main()
 {
-	srand(time(nullptr));
 	bBall eng;
 	if (eng.Init(1280, 960))
 		eng.Start(5, 5);

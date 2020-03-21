@@ -63,6 +63,14 @@ public:
 			SDL_DestroyTexture(texture);
 	}
 };
+Sprite::Sprite(SDL_Texture* t = nullptr, unsigned int layer = 0, int x = 0, int y = 0)
+{
+	texture = t;
+	nLayer = layer;
+	pos.x = x;
+	pos.y = y;
+	SDL_QueryTexture(t, nullptr, nullptr, &pos.w, &pos.h);
+}
 class PhysicsAsset
 {
 public:
@@ -124,14 +132,7 @@ class TextureList
 		};
 };
 
-Sprite::Sprite(SDL_Texture* t = nullptr, unsigned int layer = 0, int x = 0, int y = 0)
-{
-	texture = t;
-	nLayer = layer;
-	pos.x = x;
-	pos.y = y;
-	SDL_QueryTexture(t, nullptr, nullptr, &pos.w, &pos.h);
-}
+
 bool PhysicsAsset::CollisionCheck(SDL_Rect a, SDL_Rect b)
 {
 	if ((a.x <= b.x + b.w && a.x >= b.x) || (a.w + a.x <= b.w + b.x && a.w + a.x >= b.x))
@@ -302,6 +303,7 @@ public:
 	int GameLoop();
 
 	SDL_Texture* loadTexture(std::string location);
+	SDL_Texture* loadTexture(std::string location, Pixel mask);
 	SDL_Texture* CreateTextureFromPixels(std::vector<Pixel> &pixels, unsigned int nLayer, int w, int h);
 };
 
@@ -483,6 +485,51 @@ SDL_Texture* PixENG::loadTexture(std::string path)
 	}
 
 	return newTexture;
+}
+SDL_Texture* PixENG::loadTexture(std::string path, Pixel mask)
+{
+	SDL_Surface* loadSurface = IMG_Load(path.c_str());
+	SDL_Texture* newT = nullptr;
+	if (!loadSurface)
+	{
+		printf("Could not load Surface! %s", SDL_GetError());
+	}
+	else
+	{
+		SDL_Surface* formattedSurface = SDL_ConvertSurfaceFormat(loadSurface, SDL_GetWindowPixelFormat(gWind), 0);
+		if (!formattedSurface)
+		{
+			printf("Unable to convert loaded surface to display format! SDL Error: %s\n", SDL_GetError());
+		}
+		else
+		{
+			//Create blank streamable texture
+			newT = SDL_CreateTexture(gRend, SDL_GetWindowPixelFormat(gWind), SDL_TEXTUREACCESS_STREAMING, formattedSurface->w, formattedSurface->h);
+			if (!newT)
+			{
+				printf("Unable to create blank texture! SDL Error: %s\n", SDL_GetError());
+			}
+			else
+			{
+				Uint32 pFormat = SDL_GetWindowPixelFormat(gWind);
+				SDL_PixelFormat* mappingFormat = SDL_AllocFormat(pFormat);
+				Uint32 colorKey = SDL_MapRGB(mappingFormat, mask.r, mask.g, mask.b);
+				Uint32 transparent = SDL_MapRGBA(mappingFormat, 0xFF, 0xFF, 0xFF, 0x00);
+				void* pixelVoid = nullptr;
+				int pitch = 0;
+
+				SDL_LockTexture(newT, NULL, &pixelVoid, &pitch);
+				memcpy(pixelVoid, formattedSurface->pixels, formattedSurface->pitch * formattedSurface->h);
+
+				Uint32* pixels = (Uint32*)pixelVoid;
+				for (int i = 0; i < (formattedSurface->pitch / 4) * formattedSurface->h; i++)
+					if (pixels[i] == colorKey)
+						pixels[i] = transparent;
+			}
+		}
+	}
+	SDL_ClearError();
+	return newT;
 }
 //Does not work atm
 SDL_Texture *PixENG::CreateTextureFromPixels(std::vector<Pixel> &p, unsigned int nLayer, int w, int h)
