@@ -304,7 +304,7 @@ public:
 
 	SDL_Texture* loadTexture(std::string location);
 	SDL_Texture* loadTexture(std::string location, Pixel mask);
-	SDL_Texture* CreateTextureFromPixels(std::vector<Pixel> &pixels, unsigned int nLayer, int w, int h);
+	SDL_Texture* CreateTextureFromPixels(std::vector<Pixel> &pixels, int w, int h);
 };
 
 
@@ -532,7 +532,7 @@ SDL_Texture* PixENG::loadTexture(std::string path, Pixel mask)
 	return newT;
 }
 //Does not work atm
-SDL_Texture *PixENG::CreateTextureFromPixels(std::vector<Pixel> &p, unsigned int nLayer, int w, int h)
+SDL_Texture *PixENG::CreateTextureFromPixels(std::vector<Pixel> &p, int w, int h)
 {
 	SDL_Texture* sdlTexture = nullptr;
 	uint32_t pixFormat = SDL_GetWindowPixelFormat(gWind);
