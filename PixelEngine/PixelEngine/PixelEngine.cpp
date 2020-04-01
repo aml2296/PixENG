@@ -5,14 +5,48 @@
 
 class Players : public PhysEntity
 {
-	Sprite sprite;
+public:
+	float xAxis = 0;
+	float yAxis = 0;
 
+	CollisionBox groundCheck;
+
+	void HandleInput()
+	{
+		const Uint8* currentKeyStates = SDL_GetKeyboardState(NULL);
+		yAxis = xAxis = 0;
+		if (currentKeyStates[SDL_SCANCODE_UP])
+			yAxis += -1;
+		if (currentKeyStates[SDL_SCANCODE_DOWN])
+			yAxis += 1;
+		if (currentKeyStates[SDL_SCANCODE_LEFT])
+			xAxis += -1;
+		if (currentKeyStates[SDL_SCANCODE_RIGHT])
+			xAxis += 1;
+		SetVelocity(xAxis, yAxis);
+	};
+
+	Players(Sprite* s,float rPixW, float rPixH ) : PhysEntity(s)
+	{
+		pBoundingBox.w = s->pos.w *= rPixW;
+		pBoundingBox.h = s->pos.h *= rPixH;
+		s->nLayer = 1;
+		setGravity(0);
+
+		groundCheck.pBoundingBox = SDL_Rect{ 0,pBoundingBox.h,pBoundingBox.w, 1 * (int)rPixH };
+	}
+	~Players()
+	{
+
+	}
 };
 
 
-class bBall : public PixENG
+class bBallGame : public PixENG
 {
-	std::vector<PhysEntity*> bEntities;
+	std::vector<PhysEntity*> pEntitities;
+	Players *p;
+
 
 	void OnStart() override
 	{
@@ -21,33 +55,34 @@ class bBall : public PixENG
 		debug = true;
 		if (!InitAssests())
 			printf("Could not init all Assests!!!");
-		for (int i = 0; i < bEntities.size(); i++)
-			dRect.push_back(bEntities[i]->pBounds());
+		for (int i = 0; i < pEntitities.size(); i++)
+			dRect.push_back(pEntitities[i]->pBounds());
 	}
 	bool OnUpdate(float dT) override
 	{
 		////Handle Player Input
 		//
-
+		if (p)
+			p->HandleInput();
 
 		////Phys Related
 		//Move
-		for (int i = 0; i < bEntities.size(); i++)
+		for (int i = 0; i < pEntitities.size(); i++)
 		{
-			if (bEntities[i]->Gravity())
-				bEntities[i]->AddVelocity(0.0f, bEntities[i]->GravityValue());
-			bEntities[i]->ApplyVelocity();
+			if (pEntitities[i]->Gravity())
+				pEntitities[i]->AddVelocity(0.0f, pEntitities[i]->GravityValue());
+			pEntitities[i]->ApplyVelocity();
 		}
 
 		//Check for Collisions
-		if (bEntities.size() > 1)
+		if (pEntitities.size() > 1)
 		{
-			for (int i = 0; i < bEntities.size(); i++)
+			for (int i = 0; i < pEntitities.size(); i++)
 			{
-				for (int n = i + 1; n < bEntities.size(); n++)
-					if (PhysicsAsset::CollisionCheck(*bEntities[i]->pBounds(), *bEntities[n]->pBounds()))
+				for (int n = i + 1; n < pEntitities.size(); n++)
+					if (PhysicsAsset::CollisionCheck(*pEntitities[i]->pBounds(), *pEntitities[n]->pBounds()))
 					{
-						bEntities[i]->HandleCollision(*bEntities[n]->pBounds());
+						pEntitities[i]->HandleCollision(*pEntitities[n]->pBounds());
 					}
 			}
 		}
@@ -57,29 +92,24 @@ class bBall : public PixENG
 	{
 		bool success = true;
 
-		PhysEntity* bBaller, * bCourt;
+		PhysEntity* bCourt;
 		Sprite* asset;
 		
 		//Background
 		asset = new Sprite(loadTexture("Backdrop_1.png"));
 		asset->pos.w *= rPixW;
 		asset->pos.h *= rPixH;
-		asset->pos.x = -0.5 * (asset->pos.w - screenW);
-		asset->pos.y = -(asset->pos.h - screenH);
 		tList.insert(asset->texture, &asset->pos, 0);
 
 		//Bballer
-		asset = new Sprite(loadTexture("BballSprite2.png"));
-		asset->pos.w *= rPixW;
-		asset->pos.h *= rPixH;
-		asset->nLayer = 1;
-		bBaller = new PhysEntity(asset);
-		bBaller->setGravity(0.025f);
-		bBaller->AddVelocity(0.0f, 5.0f);
-		tList.insert(asset->texture, &asset->pos, &asset->nLayer);
-		bEntities.push_back(bBaller);
+		p = new Players(new Sprite(PixENG::loadTexture("BballSprite2.png")), rPixW, rPixH);
+		tList.insert(p->getTexture(), p->pBounds(), 1);
+		pEntitities.push_back(p);
+		dRect.push_back(&p->groundCheck.pBoundingBox);
+
 
 		//Court
+		
 		asset = new Sprite(loadTexture("Bball_Court.png", Pixel{ 255,0,255 }));
 		asset->pos.w *= rPixW;
 		asset->pos.h *= rPixH;
@@ -87,8 +117,7 @@ class bBall : public PixENG
 		bCourt->Move(-0.5 * (asset->pos.w - screenW), -(asset->pos.h - screenH));
 		bCourt->setGravity(0.0f);
 		tList.insert(asset->texture, &asset->pos, 0);
-		bEntities.push_back(bCourt);
-
+		pEntitities.push_back(bCourt);
 
 		return success;
 	}
@@ -96,7 +125,7 @@ class bBall : public PixENG
 
 int main()
 {
-	bBall eng;
+	bBallGame eng;
 	if (eng.Init(1280, 960))
 		eng.Start(5, 5);
 	return 0;

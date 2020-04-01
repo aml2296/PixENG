@@ -54,16 +54,16 @@ public:
 	SpriteFlags flags = SpriteFlags::NoFlag;
 	SDL_Texture* texture;
 	SDL_Rect pos;
-	unsigned int nLayer = 0;
+	int nLayer = 0;
 
-	Sprite(SDL_Texture* t, unsigned int layer, int x, int y);
+	Sprite(SDL_Texture* t, int layer, int x, int y);
 	~Sprite()
 	{
 		if (texture)
 			SDL_DestroyTexture(texture);
 	}
 };
-Sprite::Sprite(SDL_Texture* t = nullptr, unsigned int layer = 0, int x = 0, int y = 0)
+Sprite::Sprite(SDL_Texture* t = nullptr, int layer = 0, int x = 0, int y = 0)
 {
 	texture = t;
 	nLayer = layer;
@@ -71,22 +71,35 @@ Sprite::Sprite(SDL_Texture* t = nullptr, unsigned int layer = 0, int x = 0, int 
 	pos.y = y;
 	SDL_QueryTexture(t, nullptr, nullptr, &pos.w, &pos.h);
 }
-class PhysicsAsset
+
+class CollisionBox
+{
+public:
+	SDL_Rect pBoundingBox;
+	CollisionBox()
+	{
+		pBoundingBox = SDL_Rect{ 0,0,0,0 };
+	};
+	CollisionBox(SDL_Rect r)
+	{
+		pBoundingBox = r;
+	}
+	static bool CollisionCheck(SDL_Rect a, SDL_Rect b);
+	virtual void onCollision(CollisionBox other) {};
+	virtual void onColliding(CollisionBox other) {};
+	virtual void onExitCollision(CollisionBox other) {};
+};
+class PhysicsAsset : public CollisionBox
 {
 public:
 	float velocityX = 0.0f;
 	float velocityY = 0.0f;
-	SDL_Rect pBoundingBox;
 	bool gravity = true;
 	float gravityAmp = -9.8f;
 
 	//Returns true if the two Rects are touching or colliding
-	static bool CollisionCheck(SDL_Rect a, SDL_Rect b);
-	virtual void onCollision(PhysicsAsset other) {};
-	virtual void onColliding(PhysicsAsset other) {};
-	virtual void onExitCollision(PhysicsAsset other) {};
 };
-class PhysEntity : PhysicsAsset
+class PhysEntity : public PhysicsAsset
 {
 private:
 	int posX = 0;
@@ -103,7 +116,9 @@ public:
 	void setGravity(float g) { gravityAmp = g; };
 	float GravityValue() { return gravityAmp; };
 	void AddVelocity(float x, float y) { velocityX += x;velocityY += y; };
+	void SetVelocity(float x, float y) { velocityX = x; velocityY = y; };
 	void ApplyVelocity() { Translate(velocityX, velocityY); };
+	SDL_Texture* getTexture() { return sprite->texture; };
 	SDL_Rect *pBounds() { return &pBoundingBox; };
 	void HandleCollision(SDL_Rect b);
 };
@@ -113,13 +128,13 @@ struct TextureListNode
 {
 	SDL_Texture* texture = nullptr;
 	SDL_Rect* bounds = nullptr;
-	unsigned int* layer = 0;
+	int layer = 0;
 };
 class TextureList
 {
 	public:
 		std::vector<TextureListNode> list;
-		void insert(SDL_Texture* t, SDL_Rect *r, unsigned int* l)
+		void insert(SDL_Texture* t, SDL_Rect *r, int l)
 		{
 			std::vector<TextureListNode>::iterator it = list.begin();
 			while(it != list.end())
@@ -133,7 +148,7 @@ class TextureList
 };
 
 
-bool PhysicsAsset::CollisionCheck(SDL_Rect a, SDL_Rect b)
+bool CollisionBox::CollisionCheck(SDL_Rect a, SDL_Rect b)
 {
 	if ((a.x <= b.x + b.w && a.x >= b.x) || (a.w + a.x <= b.w + b.x && a.w + a.x >= b.x))
 		if ((a.y <= b.y + b.h && a.y >= b.y) || (a.h + a.x <= b.h + b.y && a.h + a.y >= b.y))
@@ -284,6 +299,7 @@ public:
 	std::vector<Pixel> pixelArray;
 
 	SDL_Window* gWind = nullptr;
+	SDL_DisplayMode dMode;
 	SDL_Renderer* gRend = nullptr;
 	SDL_Event gEvent;
 	Uint32 winID = 0;
@@ -310,7 +326,6 @@ public:
 
 PixENG::PixENG()
 {
-	
 } 
 PixENG::~PixENG()
 {
@@ -352,7 +367,7 @@ bool PixENG::Init(int scrW, int scrH)
 			}
 			else
 			{
-				int imgFlags = IMG_INIT_PNG;
+				int imgFlags = IMG_INIT_PNG;			
 				winID = SDL_GetWindowID(gWind);
 				if (!(IMG_Init(imgFlags) & imgFlags))
 				{
@@ -496,7 +511,7 @@ SDL_Texture* PixENG::loadTexture(std::string path, Pixel mask)
 	}
 	else
 	{
-		SDL_Surface* formattedSurface = SDL_ConvertSurfaceFormat(loadSurface, SDL_GetWindowPixelFormat(gWind), 0);
+		SDL_Surface* formattedSurface = SDL_ConvertSurfaceFormat(loadSurface, SDL_PIXELFORMAT_RGBA8888, 0);
 		if (!formattedSurface)
 		{
 			printf("Unable to convert loaded surface to display format! SDL Error: %s\n", SDL_GetError());
@@ -504,16 +519,18 @@ SDL_Texture* PixENG::loadTexture(std::string path, Pixel mask)
 		else
 		{
 			//Create blank streamable texture
-			newT = SDL_CreateTexture(gRend, SDL_GetWindowPixelFormat(gWind), SDL_TEXTUREACCESS_STREAMING, formattedSurface->w, formattedSurface->h);
+			newT = SDL_CreateTexture(gRend, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, formattedSurface->w, formattedSurface->h);
+			SDL_SetTextureBlendMode(newT, SDL_BLENDMODE_BLEND);
 			if (!newT)
 			{
 				printf("Unable to create blank texture! SDL Error: %s\n", SDL_GetError());
 			}
 			else
 			{
-				Uint32 pFormat = SDL_GetWindowPixelFormat(gWind);
+				
+				Uint32 pFormat = SDL_PIXELFORMAT_RGBA8888;
 				SDL_PixelFormat* mappingFormat = SDL_AllocFormat(pFormat);
-				Uint32 colorKey = SDL_MapRGB(mappingFormat, mask.r, mask.g, mask.b);
+				Uint32 colorKey = SDL_MapRGB(mappingFormat, (int)mask.r, (int)mask.g, (int)mask.b);
 				Uint32 transparent = SDL_MapRGBA(mappingFormat, 0xFF, 0xFF, 0xFF, 0x00);
 				void* pixelVoid = nullptr;
 				int pitch = 0;
@@ -525,9 +542,13 @@ SDL_Texture* PixENG::loadTexture(std::string path, Pixel mask)
 				for (int i = 0; i < (formattedSurface->pitch / 4) * formattedSurface->h; i++)
 					if (pixels[i] == colorKey)
 						pixels[i] = transparent;
+				SDL_UnlockTexture(newT);
+				SDL_FreeFormat(mappingFormat);
 			}
 		}
+		SDL_FreeSurface(formattedSurface);
 	}
+	SDL_FreeSurface(loadSurface);
 	SDL_ClearError();
 	return newT;
 }
