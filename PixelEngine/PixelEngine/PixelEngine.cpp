@@ -3,14 +3,13 @@
 #include<ctime>
 
 
-class Players : public PhysEntity
+class Players : public Sprite
 {
 public:
-	float xAxis = 0;
-	float yAxis = 0;
+	int xAxis = 0;
+	int yAxis = 0;
 
-	CollisionBox groundCheck;
-
+	
 	void HandleInput()
 	{
 		const Uint8* currentKeyStates = SDL_GetKeyboardState(NULL);
@@ -23,17 +22,11 @@ public:
 			xAxis += -1;
 		if (currentKeyStates[SDL_SCANCODE_RIGHT])
 			xAxis += 1;
-		SetVelocity(xAxis, yAxis);
 	};
 
-	Players(Sprite* s,float rPixW, float rPixH ) : PhysEntity(s)
+	Players(Sprite* s,float rPixW, float rPixH ) : Sprite(*s)
 	{
-		pBoundingBox.w = s->pos.w *= rPixW;
-		pBoundingBox.h = s->pos.h *= rPixH;
 		s->nLayer = 1;
-		setGravity(0);
-
-		groundCheck.pBoundingBox = SDL_Rect{ 0,pBoundingBox.h,pBoundingBox.w, 1 * (int)rPixH };
 	}
 	~Players()
 	{
@@ -41,12 +34,47 @@ public:
 	}
 };
 
+class Level : public Sprite
+{
+public:
+	std::vector <Pixel*> bPixels;
+
+	Level() {
+	};
+	~Level()
+	{
+		destroy();
+	}
+	bool Init();
+	void destroy();
+	bool UpdatePix();
+};
+
+bool Level::Init()
+{
+	bool success = true;
+	for (int y = 0; y < pos.h; y++)
+		for (int x = 0; x < pos.w; x++)
+			bPixels.push_back(new Pixel{ 255,0,0 });
+	return true;
+}
+void Level::destroy()
+{
+	while (bPixels.size() != 0)
+	{
+		Pixel* p = bPixels.front();
+		if (p != nullptr)
+		{
+			bPixels.erase(bPixels.begin());
+			delete p;
+		}
+	}
+}
+
 
 class bBallGame : public PixENG
 {
-	std::vector<PhysEntity*> pEntitities;
-	Players *p;
-
+	Level map;
 
 	void OnStart() override
 	{
@@ -55,71 +83,30 @@ class bBallGame : public PixENG
 		debug = true;
 		if (!InitAssests())
 			printf("Could not init all Assests!!!");
-		for (int i = 0; i < pEntitities.size(); i++)
-			dRect.push_back(pEntitities[i]->pBounds());
 	}
 	bool OnUpdate(float dT) override
 	{
-		////Handle Player Input
-		//
-		if (p)
-			p->HandleInput();
-
-		////Phys Related
-		//Move
-		for (int i = 0; i < pEntitities.size(); i++)
-		{
-			if (pEntitities[i]->Gravity())
-				pEntitities[i]->AddVelocity(0.0f, pEntitities[i]->GravityValue());
-			pEntitities[i]->ApplyVelocity();
-		}
-
-		//Check for Collisions
-		if (pEntitities.size() > 1)
-		{
-			for (int i = 0; i < pEntitities.size(); i++)
+		for (int y = 0; y < map.pos.h; y++)
+			for (int x = 0; x < map.pos.w; x++)
 			{
-				for (int n = i + 1; n < pEntitities.size(); n++)
-					if (PhysicsAsset::CollisionCheck(*pEntitities[i]->pBounds(), *pEntitities[n]->pBounds()))
-					{
-						pEntitities[i]->HandleCollision(*pEntitities[n]->pBounds());
-					}
+				map.bPixels[x + (y * map.pos.w)]->r = (map.bPixels[x + (y * map.pos.w)]->r + 5 % 255);
+				map.bPixels[x + (y * map.pos.w)]->g = 0;
+				map.bPixels[x + (y * map.pos.w)]->b = 0;
+				map.bPixels[x + (y * map.pos.w)]->a = 255;
 			}
-		}
+		UpdateTexture(map.texture, map.bPixels);
 		return true;
 	}
 	bool InitAssests()
 	{
 		bool success = true;
 
-		PhysEntity* bCourt;
-		Sprite* asset;
-		
-		//Background
-		asset = new Sprite(loadTexture("Backdrop_1.png"));
-		asset->pos.w *= rPixW;
-		asset->pos.h *= rPixH;
-		tList.insert(asset->texture, &asset->pos, 0);
+		map.pos = SDL_Rect{ 0,0,screenW,screenH };
+		map.Init();
+		map.texture = bBallGame::CreateTextureFromPixels(map.bPixels, screenW, screenH);
+		tList.insert(map.texture, &map.pos, 0);
 
-		//Bballer
-		p = new Players(new Sprite(PixENG::loadTexture("BballSprite2.png")), rPixW, rPixH);
-		tList.insert(p->getTexture(), p->pBounds(), 1);
-		pEntitities.push_back(p);
-		dRect.push_back(&p->groundCheck.pBoundingBox);
-
-
-		//Court
-		
-		asset = new Sprite(loadTexture("Bball_Court.png", Pixel{ 255,0,255 }));
-		asset->pos.w *= rPixW;
-		asset->pos.h *= rPixH;
-		bCourt = new PhysEntity(asset, SDL_Rect{ 0,screenH - 10,asset->pos.w,10 * (int)rPixH });
-		bCourt->Move(-0.5 * (asset->pos.w - screenW), -(asset->pos.h - screenH));
-		bCourt->setGravity(0.0f);
-		tList.insert(asset->texture, &asset->pos, 0);
-		pEntitities.push_back(bCourt);
-
-		return success;
+		return true;
 	}
 };
 

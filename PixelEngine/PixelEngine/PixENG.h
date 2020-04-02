@@ -320,7 +320,7 @@ public:
 
 	SDL_Texture* loadTexture(std::string location);
 	SDL_Texture* loadTexture(std::string location, Pixel mask);
-	SDL_Texture* CreateTextureFromPixels(std::vector<Pixel> &pixels, unsigned int nLayer, int w, int h);
+	SDL_Texture* CreateTextureFromPixels(std::vector<Pixel*> &pixels, int w, int h);
 };
 
 
@@ -553,39 +553,60 @@ SDL_Texture* PixENG::loadTexture(std::string path, Pixel mask)
 	return newT;
 }
 //Does not work atm
-SDL_Texture *PixENG::CreateTextureFromPixels(std::vector<Pixel> &p, unsigned int nLayer, int w, int h)
+SDL_Texture *PixENG::CreateTextureFromPixels(std::vector<Pixel*> &p, int w, int h)
 {
-	SDL_Texture* sdlTexture = nullptr;
-	uint32_t pixFormat = SDL_GetWindowPixelFormat(gWind);
-	SDL_PixelFormat* pixFormatMap = SDL_AllocFormat(pixFormat);
-	sdlTexture = SDL_CreateTexture(gRend, pixFormat, SDL_TEXTUREACCESS_STREAMING, w*rPixW, h*rPixH);
-
-	if (sdlTexture == nullptr)
+	SDL_Surface* loadSurface = SDL_CreateRGBSurface(0, w, h, 32, 0xff000000, 0x00ff0000, 0x0000ff00, 0x000000ff);
+	SDL_Texture* newT = nullptr;
+	if (!loadSurface)
 	{
-		std::ofstream error("error.txt", std::ios::trunc);
-		error << "Could not Create SDL_Texture:: " << SDL_GetError() << std::endl;
-		error.close();
-		SDL_ClearError();
+		printf("Could not load Surface! %s", SDL_GetError());
 	}
 	else
 	{
-		SDL_Surface* surf = SDL_CreateRGBSurface(0, w * rPixW, h * rPixH, 32, rMask, gMask, bMask, aMask);
-		SDL_LockSurface(surf);
-		if (SDL_LockTexture(sdlTexture, NULL, &surf->pixels, &surf->pitch) < 0)
+		SDL_Surface* formattedSurface = SDL_ConvertSurfaceFormat(loadSurface, SDL_PIXELFORMAT_RGBA8888, 0);
+		if (!formattedSurface)
 		{
-			printf("SDL_LockTexture failed: %s\n", SDL_GetError());
-			SDL_ClearError();
+			printf("Unable to convert loaded surface to display format! SDL Error: %s\n", SDL_GetError());
 		}
 		else
 		{
-			uint32_t* textPix = (uint32_t*)surf->pixels;
-			for (int tX = 0; tX < w; tX++)
-				for (int tY = 0; tY < h; tY++)
-					memset(textPix, SDL_MapRGBA(pixFormatMap, p[tX + (tY * w)].r, p[tX + (tY * w)].g, (uint8_t)(w * h / 255) * tX + (tY * w), p[tX + (tY * w)].a), sizeof(uint32_t));
-			SDL_UnlockTexture(sdlTexture);
-			SDL_FreeFormat(pixFormatMap);
-			SDL_UnlockSurface(surf);
+			//Create blank streamable texture
+			newT = SDL_CreateTexture(gRend, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, formattedSurface->w, formattedSurface->h);
+			SDL_SetTextureBlendMode(newT, SDL_BLENDMODE_BLEND);
+			if (!newT)
+			{
+				printf("Unable to create blank texture! SDL Error: %s\n", SDL_GetError());
+			}
+			else
+			{
+
+				Uint32 pFormat = SDL_PIXELFORMAT_RGBA8888;
+				SDL_PixelFormat* mappingFormat = SDL_AllocFormat(pFormat);
+				void* pixelVoid = nullptr;
+				int pitch = 0;
+
+				SDL_LockTexture(newT, NULL, &pixelVoid, &pitch);
+				memcpy(pixelVoid, formattedSurface->pixels, formattedSurface->pitch * formattedSurface->h);
+
+				Uint32* pixels = (Uint32*)pixelVoid;
+				for (int i = 0; i < (formattedSurface->pitch / 4) * formattedSurface->h; i++)
+					pixels[i] = SDL_MapRGBA(mappingFormat, p[i]->r, p[i]->g, p[i]->b, p[i]->a);
+				SDL_UnlockTexture(newT);
+				SDL_FreeFormat(mappingFormat);
+			}
 		}
+		SDL_FreeSurface(formattedSurface);
 	}
-	return sdlTexture;
+	SDL_FreeSurface(loadSurface);
+	SDL_ClearError();
+ 	return newT;
+}
+//Updates Texture
+void UpdateTexture(SDL_Texture *texture,std::vector<Pixel*> pixels)
+{
+	Uint32* lockedPixels;
+	int pitch;
+	SDL_LockTexture(texture,NULL, reinterpret_cast< void** >( &lockedPixels),&pitch);
+	std::copy( pixels.begin(), pixels.end(), lockedPixels );
+	SDL_UnlockTexture(texture);
 }
