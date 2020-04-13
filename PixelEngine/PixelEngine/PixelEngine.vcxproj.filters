@@ -23,5 +23,8 @@
     <ClInclude Include="PixENG.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="SINet.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

@@ -8,6 +8,8 @@
 #include <SDL_ttf.h>
 #include <SDL_thread.h>
 #include <chrono>
+#include <math.h>
+#include "SINet.h"
 
 //For Flag Comparisons
 template<class T> inline T operator~ (T a) { return (T)~(int)a; }
@@ -18,13 +20,7 @@ template<class T> inline T& operator|= (T& a, T b) { return (T&)((int&)a |= (int
 template<class T> inline T& operator&= (T& a, T b) { return (T&)((int&)a &= (int)b); }
 template<class T> inline T& operator^= (T& a, T b) { return (T&)((int&)a ^= (int)b); }
 
-enum class SpriteFlags
-{
-	NoFlag = 0 << 0,
-	hasMask = 1 << 0
-};
-
-struct Pixel
+class Pixel
 {
 public:
 	union
@@ -46,24 +42,53 @@ public:
 		b = blue;
 		a = alpha;
 	};
+	operator Uint32() const{ return c; };
+	Pixel operator=(const Pixel& o)
+	{
+		r = o.r;
+		g = o.g;
+		b = o.b;
+		a = o.a;
+		return *this;
+	};
 };
-
+enum class SpriteFlags
+{
+	NoFlag = 0 << 0,
+	hasMask = 1 << 0
+};
 class Sprite
 {
+private:
+	SDL_Texture* texture;
 public:
 	SpriteFlags flags = SpriteFlags::NoFlag;
-	SDL_Texture* texture;
 	SDL_Rect pos;
 	int nLayer = 0;
 
+	bool SetTexture(SDL_Texture* t)
+	{
+		texture = t;
+		SDL_QueryTexture(t, nullptr, nullptr, &pos.w, &pos.h);
+		return t;
+	}
+	SDL_Texture* GetTexture() { return texture; }
 	Sprite(SDL_Texture* t, int layer, int x, int y);
+	Sprite operator=(const Sprite& o)
+	{
+		flags = o.flags;
+		texture = o.texture;
+		pos = o.pos;
+		nLayer = o.nLayer;
+		return *this;
+	}
 	~Sprite()
 	{
 		if (texture)
 			SDL_DestroyTexture(texture);
 	}
 };
-Sprite::Sprite(SDL_Texture* t = nullptr, int layer = 0, int x = 0, int y = 0)
+Sprite::Sprite(SDL_Texture* t = nullptr, int layer = 0, int x = 10, int y = 10)
 {
 	texture = t;
 	nLayer = layer;
@@ -72,69 +97,556 @@ Sprite::Sprite(SDL_Texture* t = nullptr, int layer = 0, int x = 0, int y = 0)
 	SDL_QueryTexture(t, nullptr, nullptr, &pos.w, &pos.h);
 }
 
-class CollisionBox
-{
-public:
-	SDL_Rect pBoundingBox;
-	CollisionBox()
-	{
-		pBoundingBox = SDL_Rect{ 0,0,0,0 };
-	};
-	CollisionBox(SDL_Rect r)
-	{
-		pBoundingBox = r;
-	}
-	static bool CollisionCheck(SDL_Rect a, SDL_Rect b);
-	virtual void onCollision(CollisionBox other) {};
-	virtual void onColliding(CollisionBox other) {};
-	virtual void onExitCollision(CollisionBox other) {};
-};
-class PhysicsAsset : public CollisionBox
-{
-public:
-	float velocityX = 0.0f;
-	float velocityY = 0.0f;
-	bool gravity = true;
-	float gravityAmp = -9.8f;
-
-	//Returns true if the two Rects are touching or colliding
-};
-class PhysEntity : public PhysicsAsset
+class ATexture
 {
 private:
-	int posX = 0;
-	int posY = 0;
-	Sprite* sprite;
+	SDL_Point dimensions;
+	SDL_Texture* drawTexture;
+	SDL_Rect pos;
+	Pixel penColor;
+	void* pixPtr;
+	int pitch;
+
+	int DirectLine(float slope, int direction, SDL_Point originalPoint, SDL_Point currentPoint);
 public:
-	PhysEntity(Sprite* spt) { sprite = spt; pBoundingBox = sprite->pos; };
-	PhysEntity(Sprite* spt, SDL_Rect bBounds){sprite = spt;	pBoundingBox = bBounds;};
-	//Moves to Point x,y
-	void Move(int x, int y) { Translate(x - posX, y - posY); };
-	//Translates PhysEntity and updates Children Componenets
-	void Translate(int x, int y);
-	bool Gravity() { return gravity; };
-	void setGravity(float g) { gravityAmp = g; };
-	float GravityValue() { return gravityAmp; };
-	void AddVelocity(float x, float y) { velocityX += x;velocityY += y; };
-	void SetVelocity(float x, float y) { velocityX = x; velocityY = y; };
-	void ApplyVelocity() { Translate(velocityX, velocityY); };
-	SDL_Texture* getTexture() { return sprite->texture; };
-	SDL_Rect *pBounds() { return &pBoundingBox; };
-	void HandleCollision(SDL_Rect b);
+	const double PI = 3.145927;
+
+	bool lockTexture();
+	bool unlockTexture();
+	void SetTexture(SDL_Texture* t, SDL_Renderer* r, int w, int h);
+	void* GetPixels()
+	{
+		return pixPtr;
+	};
+	int& GetPitch()
+	{
+		return pitch;
+	};
+	int GetWidth();
+	int GetHeight();
+	SDL_Texture* GetTexture()
+	{
+		return drawTexture;
+	};
+	void SetColor(Pixel p)
+	{
+		penColor = p;
+	};
+	Pixel GetColor()
+	{ 
+		return penColor;
+	};
+	bool DrawRect(SDL_Rect r, int thickness);
+	bool DrawCircle(SDL_Point center, int radius, int thickness);
+	bool DrawLine(SDL_Point A, SDL_Point B);
+	SDL_Rect& getRect()
+	{
+		return pos;
+	}
+	ATexture()
+	{
+		dimensions = { -1,-1 };
+		penColor = { 255,255,255,255 };
+		pixPtr = nullptr;
+		drawTexture = nullptr;
+		pitch = 0;
+	}
 };
+bool ATexture::lockTexture()
+{
+	if (pixPtr != nullptr)
+	{
+		printf("Can't modify alread locked Texture!\n");
+		return false;
+	}
+	else
+	{
+		if (SDL_LockTexture(drawTexture, NULL, &pixPtr, &pitch) != 0)
+		{
+			printf("Could not lock texture!! SDL_Error: %s\n", SDL_GetError());
+			return false;
+		}
+		return true;
+	}
+}
+bool ATexture::unlockTexture()
+{
+	if (pixPtr == nullptr)
+	{
+		printf("Texture is not locked!\n");
+		return false;
+	}
+	else
+	{
+		SDL_UnlockTexture(drawTexture);
+		pixPtr = nullptr;
+		pitch = 0;
+	}
+}
+void ATexture::SetTexture(SDL_Texture* t, SDL_Renderer* r, int w, int h)
+{
+	if (t == nullptr)
+	{
+		drawTexture = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+		SDL_SetTextureBlendMode(drawTexture, SDL_BLENDMODE_BLEND);
+	}
+	else
+		drawTexture = t;
+	SDL_QueryTexture(drawTexture, nullptr, nullptr, &dimensions.x, &dimensions.y);
+	pos = SDL_Rect{ 0, 0, dimensions.x, dimensions.y };
+	if (lockTexture())
+	{
+		void* newTVoid;
+		Uint32* newPixels;
+		Uint32* pixels = (Uint32*)GetPixels();
+		int newTPitch;
+		int count = (GetPitch() / 4) * GetHeight();
+		SDL_LockTexture(t, NULL, &newTVoid, &newTPitch);
+		if (count != (newTPitch / 4) * h)
+			return;
+		else
+		{
+			newPixels = (Uint32*)newTVoid;
+			for (int i = 0; i < count; i++)
+				*(pixels + i) = (Uint32)newPixels[i];
+		}
+		SDL_UnlockTexture(t);
+		unlockTexture();
+	}
+}
+int ATexture::GetWidth()
+{
+	if (drawTexture == nullptr)
+		return -1;
+	else
+		return dimensions.x;
+}
+int ATexture::GetHeight()
+{
+	if (drawTexture == nullptr)
+		return -1;
+	else
+		return dimensions.y;
+}
+bool ATexture::DrawRect(SDL_Rect r, int thickness)
+{
+	if (!lockTexture())
+		return false;
+	else
+	{
+		Uint32* pixels = (Uint32*)GetPixels();
+		Uint32 pFormat = SDL_PIXELFORMAT_RGBA8888;
+		SDL_PixelFormat* mappingFormat = SDL_AllocFormat(pFormat);
+
+		for (int by = (r.y > 0) ? r.y : 0; by < r.y + r.h; by++)
+			for (int bx = (r.x > 0) ? r.x : 0; bx < r.x + r.w; bx++)
+			{
+				if (bx < r.x + thickness || bx >= r.x + r.w - thickness
+					|| by < r.y + thickness || by >= r.y + r.h - thickness)
+					pixels[bx + by * GetWidth()] = SDL_MapRGBA(mappingFormat, penColor.r, penColor.g, penColor.b, penColor.a);
+			}
+		unlockTexture();
+		SDL_FreeFormat(mappingFormat);
+		return true;
+	}
+}
+bool ATexture::DrawCircle(SDL_Point center, int radius, int thickness)
+{
+	if (!lockTexture())
+		return false;
+	else
+	{
+		Uint32* pixels = (Uint32*)GetPixels();
+		Uint32 pFormat = SDL_PIXELFORMAT_RGBA8888;
+		SDL_PixelFormat* mappingFormat = SDL_AllocFormat(pFormat);
+
+		std::vector<SDL_Point> CircleApoints;
+		std::vector<SDL_Point> CircleBpoints;
+		SDL_Point container = { radius + 1, radius + 1 };
+		double CircleAx = radius + 1;
+		double CircleAy = radius + 1;
+		double CircleBx = radius + 1;
+		double CircleBy = radius + 1;
+		SDL_Point newPoint;
+		int theta = 0;
+
+		for (int d = 0; d < 360; d += 1)
+		{
+			if (d < 90)
+
+			{
+				CircleAx = radius * cos((double)d * PI / 180);
+				CircleAy = radius * sin((double)d * PI / 180);
+				CircleBx = (radius - thickness) * cos((double)d * PI / 180);
+				CircleBy = (radius - thickness) * sin((double)d * PI / 180);
+			}
+			else if (d < 180)
+			{
+				theta = d - 90;
+				CircleAx = -radius * cos((double)theta * PI / 180);
+				CircleAy = radius * sin((double)theta * PI / 180);
+				CircleBx = -(radius - thickness) * cos((double)theta * PI / 180);
+				CircleBy = (radius - thickness) * sin((double)theta * PI / 180);
+
+			}
+			else if (d < 270)
+			{
+				theta = d - 180;
+				CircleAx = -radius * cos((double)theta * PI / 180);
+				CircleAy = -radius * sin((double)theta * PI / 180);
+				CircleAx = -(radius - thickness) * cos((double)theta * PI / 180);
+				CircleAy = -(radius - thickness) * sin((double)theta * PI / 180);
+			}
+			else
+			{
+				theta = d - 270;
+				CircleAx = radius * cos((double)theta * PI / 180);
+				CircleAy = -radius * sin((double)theta * PI / 180);
+				CircleBx = (radius - thickness) * cos((double)theta * PI / 180);
+				CircleBy = -(radius - thickness) * sin((double)theta * PI / 180);
+			}
+			newPoint = SDL_Point{ (int)CircleAx,(int)CircleAy };
+			if (newPoint.x + center.x < GetWidth() && newPoint.x + center.x > 0
+				&& newPoint.y + center.y < GetHeight() && newPoint.y + center.y > 0
+				&& (newPoint.x != container.x || newPoint.y != container.y))
+			{
+				CircleApoints.push_back(newPoint);
+				container = newPoint;
+			}
+		}
+
+		for (int i = 0; i < CircleApoints.size(); i++)
+			pixels[center.x + CircleApoints[i].x + (center.y + CircleApoints[i].y) * GetWidth()] = SDL_MapRGBA(mappingFormat, penColor.r, penColor.g, penColor.b, penColor.a);
+		unlockTexture();
+		SDL_FreeFormat(mappingFormat);
+		return true;
+	}
+}
+bool ATexture::DrawLine(SDL_Point A, SDL_Point B)
+{
+	if (!lockTexture())
+		return false;
+	else
+	{
+		Uint32* pixels = (Uint32*)GetPixels();
+		SDL_PixelFormat* mappingFormat = SDL_AllocFormat(SDL_PIXELFORMAT_RGBA8888);
+		Uint32 pen = SDL_MapRGBA(mappingFormat, penColor.r, penColor.g, penColor.b, penColor.a);
+		int num = B.y - A.y;
+		int den = B.x - A.x;
+		float slope;
+
+		SDL_Point drawPoint = A;
+		float posY = 1;
+
+		pixels[(A.y * GetWidth()) + A.x] = pen;
+		pixels[(B.y * GetWidth()) + B.x] = pen;
+
+		if (num == 0)
+		{
+			if (den > 0)
+			{
+				for (int i = 0; i < den; i++)
+					pixels[(A.y * GetWidth()) + A.x + i] = pen;
+			}
+			else if (den < 0)
+			{
+				for (int i = 0; i > den; i--)
+					pixels[(A.y * GetWidth()) + A.x + i] = pen;
+			}
+		}
+		else if (den == 0)
+		{
+			if (num > 0)
+			{
+				for (int i = 0; i < num; i++)
+					pixels[((A.y + i) * GetWidth()) + A.x] = pen;
+			}
+			else if (num < 0)
+			{
+				for (int i = 0; i > num; i--)
+					pixels[((A.y + i) * GetWidth()) + A.x] = pen;
+			}
+		}
+		else
+		{
+			float direction[8];// 0 = Right, 1 = UpRight, 2 = Up, 3 = UpLeft, 4 = Left, 5 = BottLeft, 6 = Bottom, 7 = BottRight
+			int directInt = -1;
+
+			if (num > 0)
+				if (den > 0)
+					directInt = 7;
+				else
+					directInt = 5;
+			else
+				if (den > 0)
+					directInt = 1;
+				else
+					directInt = 3;
+
+			slope = ((float)num / (float)den);
+			switch (directInt)
+			{
+			case 7:
+				while (drawPoint.x < B.x && drawPoint.y < B.y)
+				{
+					directInt = DirectLine(slope, directInt, A, drawPoint);
+					switch (directInt)
+					{
+					case 0:
+						drawPoint.x++;
+						break;
+					case 1:
+						drawPoint.x++;
+						drawPoint.y--;
+						break;
+					case 2:
+						drawPoint.y--;
+						break;
+					case 3:
+						drawPoint.y--;
+						drawPoint.x--;
+						break;
+					case 4:
+						drawPoint.x--;
+						break;
+					case 5:
+						drawPoint.x--;
+						drawPoint.y++;
+						break;
+					case 6:
+						drawPoint.y++;
+						break;
+					case 7:
+						drawPoint.x++;
+						drawPoint.y++;
+						break;
+					default:
+						break;
+					}
+
+					pixels[(drawPoint.y * GetWidth()) + drawPoint.x] = pen;
+				}
+				break;
+			case 3:
+				while (drawPoint.x > B.x&& drawPoint.y > B.y)
+				{
+					switch (directInt)
+					{
+					case 0:
+						drawPoint.x++;
+						break;
+					case 1:
+						drawPoint.x++;
+						drawPoint.y--;
+						break;
+					case 2:
+						drawPoint.y--;
+						break;
+					case 3:
+						drawPoint.y--;
+						drawPoint.x--;
+						break;
+					case 4:
+						drawPoint.x--;
+						break;
+					case 5:
+						drawPoint.x--;
+						drawPoint.y++;
+						break;
+					case 6:
+						drawPoint.y++;
+						break;
+					case 7:
+						drawPoint.x++;
+						drawPoint.y++;
+						break;
+					default:
+						break;
+					}
+					directInt = DirectLine(slope, directInt, A, drawPoint);
+					pixels[(drawPoint.y * GetWidth()) + drawPoint.x] = pen;
+				}
+				break;
+			case 1:
+				while (drawPoint.x < B.x && drawPoint.y > B.y)
+				{
+					switch (directInt)
+					{
+					case 0:
+						drawPoint.x++;
+						break;
+					case 1:
+						drawPoint.x++;
+						drawPoint.y--;
+						break;
+					case 2:
+						drawPoint.y--;
+						break;
+					case 3:
+						drawPoint.y--;
+						drawPoint.x--;
+						break;
+					case 4:
+						drawPoint.x--;
+						break;
+					case 5:
+						drawPoint.x--;
+						drawPoint.y++;
+						break;
+					case 6:
+						drawPoint.y++;
+						break;
+					case 7:
+						drawPoint.x++;
+						drawPoint.y++;
+						break;
+					default:
+						break;
+					}
+					directInt = DirectLine(slope, directInt, A, drawPoint);
+					pixels[(drawPoint.y * GetWidth()) + drawPoint.x] = pen;
+				}
+				break;
+			case 5:
+				while (drawPoint.x > B.x&& drawPoint.y < B.y)
+				{
+					switch (directInt)
+					{
+					case 0:
+						drawPoint.x++;
+						break;
+					case 1:
+						drawPoint.x++;
+						drawPoint.y--;
+						break;
+					case 2:
+						drawPoint.y--;
+						break;
+					case 3:
+						drawPoint.y--;
+						drawPoint.x--;
+						break;
+					case 4:
+						drawPoint.x--;
+						break;
+					case 5:
+						drawPoint.x--;
+						drawPoint.y++;
+						break;
+					case 6:
+						drawPoint.y++;
+						break;
+					case 7:
+						drawPoint.x++;
+						drawPoint.y++;
+						break;
+					default:
+						break;
+					}
+					directInt = DirectLine(slope, directInt, A, drawPoint);
+					pixels[(drawPoint.y * GetWidth()) + drawPoint.x] = pen;
+				}
+				break;
+			default:
+				break;
+			}
+		}
+		unlockTexture();
+	}
+}
+int ATexture::DirectLine(float slope, int direction, SDL_Point originalPoint, SDL_Point currentPoint)
+{
+	if (direction < 0 || direction > 7)
+		return -1;
+	else
+	{
+		SDL_Point newPoint;
+		float lowest_dS = -999999;
+		int newDirection[3] = { direction - 1,direction,direction + 1 };
+		int returnInt = -1;
+		if (newDirection[0] == -1)
+			newDirection[0] = 7;
+		if (newDirection[2] == 8)
+			newDirection[2] = 0;
+		for (int i = 0; i < 3; i++)
+		{
+			float dS = 0.0f;
+			newPoint = currentPoint;
+			switch (newDirection[i])
+			{
+			case 0:
+				newPoint.x++;
+				break;
+			case 1:
+				newPoint.x++;
+				newPoint.y--;
+				break;
+			case 2:
+				newPoint.y--;
+				break;
+			case 3:
+				newPoint.y--;
+				newPoint.x--;
+				break;
+			case 4:
+				newPoint.x--;
+				break;
+			case 5:
+				newPoint.x--;
+				newPoint.y++;
+				break;
+			case 6:
+				newPoint.y++;
+				break;
+			case 7:
+				newPoint.x++;
+				newPoint.y++;
+				break;
+			default:
+				break;
+			}
+			dS = ((float)(newPoint.y - originalPoint.y) / (float)(newPoint.x - originalPoint.x));
+			if (abs(slope - dS) < abs(slope - lowest_dS))
+			{
+				returnInt = newDirection[i];
+				lowest_dS = dS;
+			}
+		}
+		return returnInt;
+	}
+}
 
 //List of Texture's, organizes by Layer upon insertion then by time of insertion if on the same layer
 struct TextureListNode
 {
+	bool SelfDelete = false;
 	SDL_Texture* texture = nullptr;
 	SDL_Rect* bounds = nullptr;
+	SDL_Rect* stretch = nullptr;
 	int layer = 0;
+
+	void Destruct()
+	{
+		if (texture)
+			SDL_DestroyTexture(texture);
+		if (bounds)
+		{
+			delete bounds;
+			bounds = nullptr;
+		}
+		if (stretch)
+		{
+			delete stretch;
+			stretch = nullptr;
+		}
+		layer = 0;
+	}
 };
 class TextureList
 {
 	public:
 		std::vector<TextureListNode> list;
-		void insert(SDL_Texture* t, SDL_Rect *r, int l)
+		void insert(bool selfDestruct, SDL_Texture* t, SDL_Rect *r, SDL_Rect *s, int l)
 		{
 			std::vector<TextureListNode>::iterator it = list.begin();
 			while(it != list.end())
@@ -143,140 +655,132 @@ class TextureList
 					break;
 				it++;
 			}
-			list.insert(it, TextureListNode{ t,r,l });
+			list.insert(it, TextureListNode{ selfDestruct, t,r, s,l });
 		};
+		void insert(SDL_Texture* t, SDL_Rect &r, int l)
+		{
+			SDL_Rect* ptr = new SDL_Rect(r);
+			insert(true,t, ptr, nullptr, l);
+		}
+		void insert(SDL_Texture* t, SDL_Rect* r, int l)
+		{
+			insert(false, t, r, nullptr, l);
+		}
+		void insert(SDL_Texture* t, SDL_Rect* r, SDL_Rect* s, int l)
+		{
+			insert(false, t, r, s, l);
+		}
+
+		~TextureList()
+		{
+			for(int i = 0; i < list.size();i++)
+				if (list[i].SelfDelete)
+				{
+					list[i].Destruct();
+				}
+		}
 };
 
-
-bool CollisionBox::CollisionCheck(SDL_Rect a, SDL_Rect b)
+//List of Rect's and SDL_Colors to Draw for Debug Purposes
+struct DebugRectNode
 {
-	if ((a.x <= b.x + b.w && a.x >= b.x) || (a.w + a.x <= b.w + b.x && a.w + a.x >= b.x))
-		if ((a.y <= b.y + b.h && a.y >= b.y) || (a.h + a.x <= b.h + b.y && a.h + a.y >= b.y))
-			return true;
-	return false;
+	DebugRectNode* next;
+	SDL_Color* pen;
+	SDL_Rect* rect;
+
+	DebugRectNode(SDL_Rect* r, SDL_Color* c);
+};
+DebugRectNode::DebugRectNode(SDL_Rect* r = nullptr, SDL_Color* c = nullptr)
+{
+	next = nullptr;
+	pen = c;
+	rect = r;
 }
-void PhysEntity::Translate(int x, int y)
+class DebugRectList
 {
-	posX += x;
-	posY += y;
+private:
+	DebugRectNode* head = nullptr;
+	DebugRectNode* tail = nullptr;
+	int count = 0;
 
-	pBoundingBox.x += x;
-	pBoundingBox.y += y;
+	DebugRectNode* Find(SDL_Rect* r);
+public:
+	void Insert(SDL_Rect* r, SDL_Color* p);
+	bool Remove(SDL_Rect* r);
+	int Size() { return count; };
 
-	sprite->pos.x += x;
-	sprite->pos.y += y;
-}
-void PhysEntity::HandleCollision(SDL_Rect b)
-{
-	if (velocityX > 0)
+	DebugRectNode *operator[](int num) 
 	{
-		if (velocityY > 0)
-		{
-			if (velocityX > velocityY)
-			{
-				velocityY = 0;
-				Translate(0, -(pBoundingBox.y + pBoundingBox.h - b.y));
-			}
-			else if (velocityY > velocityX)
-			{
-				velocityX = 0;
-				Translate(-(pBoundingBox.x + pBoundingBox.w - b.x), 0);
-			}
-			else
-			{
-				velocityX = 0;
-				velocityY = 0;
-				Translate(-(pBoundingBox.x + pBoundingBox.w - b.x), -(pBoundingBox.y + pBoundingBox.h - b.y));
-			}
-		}
-		else if (velocityY < 0)
-		{
-			if (velocityX > -1 * velocityY)
-			{
-				velocityY = 0;
-				Translate(0, -(b.y + b.h - pBoundingBox.y));
-			}
-			else if (-1 * velocityY > velocityX)
-			{
-				velocityX = 0;
-				Translate(-(pBoundingBox.x + pBoundingBox.w - b.x), 0);
-			}
-			else
-			{
-				velocityX = 0;
-				velocityY = 0;
-				Translate(-(pBoundingBox.x + pBoundingBox.w - b.x), -(b.y + b.h - pBoundingBox.y));
-			}
-		}
-		else
-		{
-			velocityX = 0;
-			Translate(-(pBoundingBox.x + pBoundingBox.w - b.x), 0);
-		}
+		if (num < 0 || num > count)
+			return nullptr;
+
+		DebugRectNode* temp = head;
+		for (int i = 0; i < num; i++)
+			temp = temp->next;
+		return temp;
 	}
-	else if (velocityX < 0)
+};
+DebugRectNode* DebugRectList::Find(SDL_Rect* r)
+{
+	DebugRectNode* temp = head;
+
+	while (temp->next)
 	{
-		if (velocityY > 0)
-		{
-			if (-1*velocityX > velocityY)
-			{
-				velocityY = 0;
-				Translate(0, -(pBoundingBox.y + pBoundingBox.h - b.y));
-			}
-			else if (velocityY > -1*velocityX)
-			{
-				velocityX = 0;
-				Translate((b.x + b.w - pBoundingBox.x), 0);
-			}
-			else
-			{
-				velocityX = 0;
-				velocityY = 0;
-				Translate((b.x + b.w - pBoundingBox.x), -(pBoundingBox.y + pBoundingBox.h - b.y));
-			}
-		}
-		else if (velocityY < 0)
-		{
-			if (-1 * velocityX > -1*velocityY)
-			{
-				velocityY = 0;
-				Translate(0, (b.y + b.h - pBoundingBox.y));
-			}
-			else if (-1*velocityY > -1 * velocityX)
-			{
-				velocityX = 0;
-				Translate((b.x + b.w - pBoundingBox.x), 0);
-			}
-			else
-			{
-				velocityX = 0;
-				velocityY = 0;
-				Translate((b.x + b.w - pBoundingBox.x), (b.y + b.h - pBoundingBox.y));
-			}
-		}
-		else
-		{
-			velocityX = 0;
-			Translate((b.x + b.w - pBoundingBox.x), 0);
-		}
+		if (temp->next->rect)
+			return temp;
+		temp = temp->next;
+	}
+	return nullptr;
+}
+void DebugRectList::Insert(SDL_Rect* r, SDL_Color* p)
+{
+	if (tail)
+	{
+		tail->next = new DebugRectNode(r, p);
+		tail = tail->next;
 	}
 	else
+		head = tail = new DebugRectNode(r, p);
+	count++;
+}
+bool DebugRectList::Remove(SDL_Rect* r)
+{
+	DebugRectNode *temp = head;
+	if (temp)
 	{
-		if (velocityY > 0)
+		if (head->rect == r)
 		{
-			velocityY = 0;
-			Translate(0, -(pBoundingBox.y + pBoundingBox.h - b.y));
+			if (temp->next)
+				head = temp->next;
+			else
+				head = nullptr;
+			delete temp;
+			return true;
 		}
-		else if (velocityY < 0)
+		else
 		{
-			velocityY = 0;
-			Translate(0, b.y + b.h - pBoundingBox.y);
+			if (tail->rect == r)
+			{
+				while (temp->next != tail)
+					temp = temp->next;
+				temp->next = nullptr;
+				delete tail;
+				return true;
+			}
+			else
+			{
+				temp = Find(r);
+				if (temp != nullptr)
+				{
+					temp->next = temp->next->next;
+					delete temp->next;
+					return true;
+				}
+			}
 		}
 	}
+	return false;
 }
-
-
-
 
 class PixENG
 {
@@ -294,9 +798,10 @@ public:
 	bool running = false;
 	bool debug = false;
 
+	ATexture background;
 	TextureList tList;
-	std::vector<SDL_Rect*> dRect;
-	std::vector<Pixel> pixelArray;
+	DebugRectList debugRect;
+	std::vector<SDL_Point*> dPoint;
 
 	SDL_Window* gWind = nullptr;
 	SDL_DisplayMode dMode;
@@ -304,26 +809,32 @@ public:
 	SDL_Event gEvent;
 	Uint32 winID = 0;
 	
-	const uint32_t aMask = 0x000000FF;
-	const uint32_t bMask = 0x0000FF00;
-	const uint32_t gMask = 0x00FF0000;
-	const uint32_t rMask = 0xFF000000;
+	const static uint32_t aMask = 0x000000ff;
+	const static uint32_t bMask = 0x0000ff00;
+	const static uint32_t gMask = 0x00ff0000;
+	const static uint32_t rMask = 0xff000000;
+
+	SIMaster layerMaster;
 
 
 	PixENG();
 	~PixENG();
 	virtual void OnStart();
 	virtual bool OnUpdate(float dT);
+	virtual void OnExit() {};
 	bool Init(int screenW, int screenH);
 	void Start(int pixW, int pixH);
 	int GameLoop();
 
-	SDL_Texture* loadTexture(std::string location);
-	SDL_Texture* loadTexture(std::string location, Pixel mask);
-	SDL_Texture* CreateTextureFromPixels(std::vector<Pixel*> &pixels, int w, int h);
+	static SDL_Texture* CreateTextureFromPixels(Pixel* pixels, SDL_Renderer* r, int w, int h);
+	static SDL_Texture* CreateTransparentTexture(SDL_Renderer* r, int w, int h);
+	SDL_Texture* CreateTextureFromPixels(Pixel *pixels, int w, int h);
+	void SetDrawColor(Pixel c)
+	{
+		background.SetColor(c);
+	};
+	Sprite DrawRect(SDL_Rect pos, unsigned int borderT);
 };
-
-
 PixENG::PixENG()
 {
 } 
@@ -385,6 +896,7 @@ bool PixENG::Init(int scrW, int scrH)
 			}
 		}
 	}
+	SDL_GL_SetSwapInterval(0);
 	screenW = scrW;
 	screenH = scrH;
 	return true;
@@ -423,7 +935,7 @@ int PixENG::GameLoop()
 
 		////USER INPUT EVENTS
 		//Handle Input
-		while (SDL_PollEvent(&gEvent))
+ 		while (SDL_PollEvent(&gEvent))
 		{
 			switch (gEvent.type)
 			{
@@ -434,11 +946,13 @@ int PixENG::GameLoop()
 				break;
 			}
 		}
-
+		
 		////FRAME UPDATES 
 		//Handle Frame Updates
 		if (!OnUpdate(dT))
 			running = false;
+
+		layerMaster.CollisionCheck();
 
 		////RENDER
 		//Clear Screen
@@ -447,15 +961,25 @@ int PixENG::GameLoop()
 
 		//Draw Textures
 		for (int i = 0; i < tList.list.size(); i++)
-			if (SDL_RenderCopy(gRend, tList.list[i].texture, NULL, tList.list[i].bounds) < 0)
+		{
+			SDL_Rect* stretch = tList.list[i].stretch != nullptr ? tList.list[i].stretch : tList.list[i].bounds;
+			if (SDL_RenderCopy(gRend, tList.list[i].texture, nullptr,stretch) < 0)
 				printf("Unable to render texture %i! SDL Error: %s\n", i, SDL_GetError());
-
+		}
 		//Debug Draw
 		if (debug)
 		{
+			SDL_Color currentPen;
 			SDL_SetRenderDrawColor(gRend, 0, 255, 0, 255);
-			for (int i = 0; i < dRect.size(); i++)
-				SDL_RenderDrawRect(gRend, dRect[i]);
+			for (int i = 0; i < debugRect.Size(); i++)
+			{
+				currentPen = *debugRect[i]->pen;
+				SDL_SetRenderDrawColor(gRend, currentPen.r, currentPen.g, currentPen.b, currentPen.a);
+				SDL_RenderDrawRect(gRend, debugRect[i]->rect);
+			}
+			SDL_SetRenderDrawColor(gRend, 255, 0, 0, 255);
+			for (int i = 0; i < dPoint.size(); i++)
+				SDL_RenderDrawPoint(gRend, dPoint[i]->x, dPoint[i]->y);
 		}
 		SDL_RenderPresent(gRend);
 
@@ -469,18 +993,16 @@ int PixENG::GameLoop()
 			FrameCount = 0;
 		}
 		FrameCount++;
+		SDL_Delay(50);
 	}
 	return 0;
 }
 
 
 //Loads Texture from file
-SDL_Texture* PixENG::loadTexture(std::string path)
+SDL_Texture* loadTexture(std::string path, SDL_Renderer *r)
 {
-	//The final texture
 	SDL_Texture* newTexture = NULL;
-
-	//Load image at specified path
 	SDL_Surface* loadedSurface = IMG_Load(path.c_str());
 	if (loadedSurface == NULL)
 	{
@@ -488,20 +1010,16 @@ SDL_Texture* PixENG::loadTexture(std::string path)
 	}
 	else
 	{
-		//Create texture from surface pixels
-		newTexture = SDL_CreateTextureFromSurface(gRend, loadedSurface);
+		newTexture = SDL_CreateTextureFromSurface(r, loadedSurface);
 		if (newTexture == NULL)
 		{
 			printf("Unable to create texture from %s! SDL Error: %s\n", path.c_str(), SDL_GetError());
 		}
-
-		//Get rid of old loaded surface
 		SDL_FreeSurface(loadedSurface);
 	}
-
 	return newTexture;
 }
-SDL_Texture* PixENG::loadTexture(std::string path, Pixel mask)
+SDL_Texture* loadTexture(std::string path, SDL_Renderer *r, Pixel maskColor)
 {
 	SDL_Surface* loadSurface = IMG_Load(path.c_str());
 	SDL_Texture* newT = nullptr;
@@ -519,7 +1037,7 @@ SDL_Texture* PixENG::loadTexture(std::string path, Pixel mask)
 		else
 		{
 			//Create blank streamable texture
-			newT = SDL_CreateTexture(gRend, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, formattedSurface->w, formattedSurface->h);
+			newT = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, formattedSurface->w, formattedSurface->h);
 			SDL_SetTextureBlendMode(newT, SDL_BLENDMODE_BLEND);
 			if (!newT)
 			{
@@ -530,7 +1048,7 @@ SDL_Texture* PixENG::loadTexture(std::string path, Pixel mask)
 				
 				Uint32 pFormat = SDL_PIXELFORMAT_RGBA8888;
 				SDL_PixelFormat* mappingFormat = SDL_AllocFormat(pFormat);
-				Uint32 colorKey = SDL_MapRGB(mappingFormat, (int)mask.r, (int)mask.g, (int)mask.b);
+				Uint32 colorKey = SDL_MapRGB(mappingFormat, (int)maskColor.r, (int)maskColor.g, (int)maskColor.b);
 				Uint32 transparent = SDL_MapRGBA(mappingFormat, 0xFF, 0xFF, 0xFF, 0x00);
 				void* pixelVoid = nullptr;
 				int pitch = 0;
@@ -552,10 +1070,9 @@ SDL_Texture* PixENG::loadTexture(std::string path, Pixel mask)
 	SDL_ClearError();
 	return newT;
 }
-//Does not work atm
-SDL_Texture *PixENG::CreateTextureFromPixels(std::vector<Pixel*> &p, int w, int h)
+SDL_Texture *PixENG::CreateTextureFromPixels(Pixel* p, int w, int h)
 {
-	SDL_Surface* loadSurface = SDL_CreateRGBSurface(0, w, h, 32, 0xff000000, 0x00ff0000, 0x0000ff00, 0x000000ff);
+	SDL_Surface* loadSurface = SDL_CreateRGBSurface(0, w, h, 32, rMask, gMask, bMask, aMask);
 	SDL_Texture* newT = nullptr;
 	if (!loadSurface)
 	{
@@ -579,7 +1096,6 @@ SDL_Texture *PixENG::CreateTextureFromPixels(std::vector<Pixel*> &p, int w, int 
 			}
 			else
 			{
-
 				Uint32 pFormat = SDL_PIXELFORMAT_RGBA8888;
 				SDL_PixelFormat* mappingFormat = SDL_AllocFormat(pFormat);
 				void* pixelVoid = nullptr;
@@ -590,7 +1106,7 @@ SDL_Texture *PixENG::CreateTextureFromPixels(std::vector<Pixel*> &p, int w, int 
 
 				Uint32* pixels = (Uint32*)pixelVoid;
 				for (int i = 0; i < (formattedSurface->pitch / 4) * formattedSurface->h; i++)
-					pixels[i] = SDL_MapRGBA(mappingFormat, p[i]->r, p[i]->g, p[i]->b, p[i]->a);
+					pixels[i] = SDL_MapRGBA(mappingFormat, p[i].r, p[i].g, p[i].b, p[i].a);
 				SDL_UnlockTexture(newT);
 				SDL_FreeFormat(mappingFormat);
 			}
@@ -601,12 +1117,108 @@ SDL_Texture *PixENG::CreateTextureFromPixels(std::vector<Pixel*> &p, int w, int 
 	SDL_ClearError();
  	return newT;
 }
-//Updates Texture
-void UpdateTexture(SDL_Texture *texture,std::vector<Pixel*> pixels)
+SDL_Texture* PixENG::CreateTextureFromPixels(Pixel* p, SDL_Renderer *r, int w, int h)
+{
+	SDL_Surface* loadSurface = SDL_CreateRGBSurface(0, w, h, 32, rMask, gMask, bMask, aMask);
+	SDL_Texture* newT = nullptr;
+	if (!loadSurface)
+	{
+		printf("Could not load Surface! %s", SDL_GetError());
+	}
+	else
+	{
+		SDL_Surface* formattedSurface = SDL_ConvertSurfaceFormat(loadSurface, SDL_PIXELFORMAT_RGBA8888, 0);
+		if (!formattedSurface)
+		{
+			printf("Unable to convert loaded surface to display format! SDL Error: %s\n", SDL_GetError());
+		}
+		else
+		{
+			//Create blank streamable texture
+			newT = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, formattedSurface->w, formattedSurface->h);
+			SDL_SetTextureBlendMode(newT, SDL_BLENDMODE_BLEND);
+			if (!newT)
+			{
+				printf("Unable to create blank texture! SDL Error: %s\n", SDL_GetError());
+			}
+			else
+			{
+				Uint32 pFormat = SDL_PIXELFORMAT_RGBA8888;
+				SDL_PixelFormat* mappingFormat = SDL_AllocFormat(pFormat);
+				void* pixelVoid = nullptr;
+				int pitch = 0;
+
+				SDL_LockTexture(newT, NULL, &pixelVoid, &pitch);
+				memcpy(pixelVoid, formattedSurface->pixels, formattedSurface->pitch * formattedSurface->h);
+
+				Uint32* pixels = (Uint32*)pixelVoid;
+				for (int i = 0; i < (formattedSurface->pitch / 4) * formattedSurface->h; i++)
+					pixels[i] = SDL_MapRGBA(mappingFormat, p[i].r, p[i].g, p[i].b, p[i].a);
+				SDL_UnlockTexture(newT);
+				SDL_FreeFormat(mappingFormat);
+			}
+		}
+		SDL_FreeSurface(formattedSurface);
+	}
+	SDL_FreeSurface(loadSurface);
+	SDL_ClearError();
+	return newT;
+}
+SDL_Texture* PixENG::CreateTransparentTexture(SDL_Renderer* r, int w, int h)
+{
+	SDL_Surface* loadSurface = SDL_CreateRGBSurface(0, w, h, 32, rMask, gMask, bMask, aMask);
+	SDL_Texture* newT = nullptr;
+	if (!loadSurface)
+	{
+		printf("Could not load Surface! %s", SDL_GetError());
+	}
+	else
+	{
+		SDL_Surface* formattedSurface = SDL_ConvertSurfaceFormat(loadSurface, SDL_PIXELFORMAT_RGBA8888, 0);
+		if (!formattedSurface)
+		{
+			printf("Unable to convert loaded surface to display format! SDL Error: %s\n", SDL_GetError());
+		}
+		else
+		{
+			//Create blank streamable texture
+			newT = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, formattedSurface->w, formattedSurface->h);
+			SDL_SetTextureBlendMode(newT, SDL_BLENDMODE_BLEND);
+			if (!newT)
+			{
+				printf("Unable to create blank texture! SDL Error: %s\n", SDL_GetError());
+			}
+			else
+			{
+				Uint32 pFormat = SDL_PIXELFORMAT_RGBA8888;
+				SDL_PixelFormat* mappingFormat = SDL_AllocFormat(pFormat);
+				void* pixelVoid = nullptr;
+				Uint32* pixels = nullptr;
+				Uint32 transparent = SDL_MapRGBA(mappingFormat, 0xff, 0x00, 0xff, 0x00);;
+				int pitch = 0;
+
+				SDL_LockTexture(newT, NULL, &pixelVoid, &pitch);
+				memcpy(pixelVoid, formattedSurface->pixels, formattedSurface->pitch * formattedSurface->h);
+
+				pixels = (Uint32*)pixelVoid;
+				for (int i = 0; i < w * h; i++)
+					pixels[i] = transparent;
+				SDL_UnlockTexture(newT);
+				SDL_FreeSurface(formattedSurface);
+				SDL_FreeFormat(mappingFormat);
+			}
+		}
+	}
+	SDL_ClearError();
+	return newT;
+}
+void UpdateTexture(SDL_Texture *texture, Pixel* pArray, int count)
 {
 	Uint32* lockedPixels;
 	int pitch;
+
 	SDL_LockTexture(texture,NULL, reinterpret_cast< void** >( &lockedPixels),&pitch);
-	std::copy( pixels.begin(), pixels.end(), lockedPixels );
+	for (int i = 0; i < count; i++)
+		lockedPixels[i] = pArray[i].c;
 	SDL_UnlockTexture(texture);
 }
